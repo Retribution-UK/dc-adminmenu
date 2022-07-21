@@ -1,214 +1,288 @@
-local noClipEnabled = false
-local ent
-local Invisible = nil
-local noClipCam = nil
 
-local speed = 1.0
-local maxSpeed = 32.0
-local minY, maxY = -150.0, 160.0
 
-local inputRotEnabled = false
+local IsNoClipping      = false
+local PlayerPed         = nil
+local NoClipEntity      = nil
+local Camera            = nil
+local NoClipAlpha       = nil
+local PlayerIsInVehicle = false
+local ResourceName      = GetCurrentResourceName()
 
-function toggleNoclip()
+local MinY, MaxY        = -89.0, 89.0
+
+--[[
+        Configurable values are commented.
+]]
+
+-- Perspective values
+local PedFirstPersonNoClip      = false      -- No Clip in first person when not in a vehicle
+local VehFirstPersonNoClip      = false      -- No Clip in first person when in a vehicle
+
+-- Speed settings
+local Speed                     = 1         -- Default: 1
+local MaxSpeed                  = 16.0      -- Default: 16.0
+
+-- Key bindings
+local MOVE_FORWARDS             = 32        -- Default: W
+local MOVE_BACKWARDS            = 33        -- Default: S
+local MOVE_LEFT                 = 34        -- Default: A
+local MOVE_RIGHT                = 35        -- Default: D
+local MOVE_UP                   = 44        -- Default: Q
+local MOVE_DOWN                 = 46        -- Default: E
+
+local SPEED_DECREASE            = 14        -- Default: Mouse wheel down
+local SPEED_INCREASE            = 15        -- Default: Mouse wheel up
+local SPEED_RESET               = 348       -- Default: Mouse wheel click
+local SPEED_SLOW_MODIFIER       = 36        -- Default: Left Control
+local SPEED_FAST_MODIFIER       = 21        -- Default: Left Shift
+local SPEED_FASTER_MODIFIER     = 19        -- Default: Left Alt
+
+
+local DisabledControls = function()
+    HudWeaponWheelIgnoreSelection()
+    DisableAllControlActions(0)
+    DisableAllControlActions(1)
+    DisableAllControlActions(2)
+    EnableControlAction(0, 220, true)
+    EnableControlAction(0, 221, true)
+    EnableControlAction(0, 245, true)
+end
+
+local IsControlAlwaysPressed = function(inputGroup, control)
+    return IsControlPressed(inputGroup, control) or IsDisabledControlPressed(inputGroup, control)
+end
+
+local IsPedDrivingVehicle = function(ped, veh)
+    return ped == GetPedInVehicleSeat(veh, -1)
+end
+
+local SetupCam = function(coords, rotation)
+    local entityRot = GetEntityRotation(NoClipEntity)
+    Camera = CreateCameraWithParams("DEFAULT_SCRIPTED_CAMERA", GetEntityCoords(NoClipEntity), vector3(0.0, 0.0, entityRot.z), 75.0)
+    SetCamActive(Camera, true)
+    RenderScriptCams(true, true, 1000, false, false)
+
+    if PlayerIsInVehicle == 1 then
+        AttachCamToEntity(Camera, NoClipEntity, 0.0, VehFirstPersonNoClip == true and 0.5 or -4.5, VehFirstPersonNoClip == true and 1.0 or 2.0, true)
+    else
+        AttachCamToEntity(Camera, NoClipEntity, 0.0, PedFirstPersonNoClip == true and 0.0 or -2.0, PedFirstPersonNoClip == true and 1.0 or 0.5, true)
+    end
+
+end
+
+local DestroyCamera = function(entity)
+    SetGameplayCamRelativeHeading(0)
+    RenderScriptCams(false, true, 1000, true, true)
+    DetachEntity(NoClipEntity, true, true)
+    SetCamActive(Camera, false)
+    DestroyCam(Camera, true)
+end
+
+local GetGroundCoords = function(coords)
+    local rayCast               = StartShapeTestRay(coords.x, coords.y, coords.z, coords.x, coords.y, -10000.0, 1, 0)
+    local _, hit, hitCoords     = GetShapeTestResult(rayCast)
+    return (hit == 1 and hitCoords) or coords
+end
+
+local CheckInputRotation = function()
+    local rightAxisX = GetControlNormal(0, 220)
+    local rightAxisY = GetControlNormal(0, 221)
+
+    local rotation = GetCamRot(Camera, 2)
+
+    local yValue = rightAxisY * -5
+    local newX
+    local newZ = rotation.z + (rightAxisX * -10)
+    if (rotation.x + yValue > MinY) and (rotation.x + yValue < MaxY) then
+        newX = rotation.x + yValue
+    end
+    if newX ~= nil and newZ ~= nil then
+        SetCamRot(Camera, vector3(newX, rotation.y, newZ), 2)
+    end
+    
+    SetEntityHeading(NoClipEntity, math.max(0, (rotation.z % 360)))        
+end
+
+RunNoClipThread = function()
     Citizen.CreateThread(function()
-        local ped = PlayerPedId()
-        local veh = GetVehiclePedIsIn(ped, false)
-        local inVehicle = false
+        while IsNoClipping do
+            Citizen.Wait(0)
+            CheckInputRotation()
+            DisabledControls()
 
-        if veh ~= 0 then
-            inVehicle = true
-            ent = veh
-        else
-            ent = ped
-        end
-
-        local pos = GetEntityCoords(ent)
-        local rot = GetEntityRotation(ent)
-
-        noClipCam = CreateCamWithParams("DEFAULT_SCRIPTED_CAMERA", pos, 0.0, 0.0, rot.z, 75.0, true, 2)
-        AttachCamToEntity(noClipCam, ent, 0.0, 0.0, 0.0, true)
-        RenderScriptCams(true, false, 3000, true, false)
-
-        FreezeEntityPosition(ent, true)
-        SetEntityCollision(ent, false, false)
-        SetEntityAlpha(ent, 0)
-        SetPedCanRagdoll(ped, false)
-        SetEntityVisible(ent, false)
-        if not inVehicle then
-        ClearPedTasksImmediately(ped)
-        end
-
-        if inVehicle then
-        FreezeEntityPosition(ped, true)
-        SetEntityCollision(ped, false, false)
-        SetEntityAlpha(ped, 0)
-        SetEntityVisible(ped, false)
-        end
-        while noClipEnabled do
-        Wait(0)
-        local _, fv, _, _ = GetCamMatrix(noClipCam)
-
-        if IsDisabledControlPressed(2, 17) then -- MWheelUp
-            speed = math.min(speed + 0.1, maxSpeed)
-        elseif IsDisabledControlPressed(2, 16) then -- MWheelDown
-            speed = math.max(0.1, speed - 0.1)
-        end
-
-        local multiplier = 1.0;
-
-        if IsDisabledControlPressed(2, 209) then
-            multiplier = 2.0
-        elseif IsDisabledControlPressed(2, 19) then
-            multiplier = 4.0
-        elseif IsDisabledControlPressed(2, 36) then
-            multiplier = 0.25
-        end
-
-        -- Forward and Backward
-        if IsDisabledControlPressed(2, 32) then -- W
-            local setpos = GetEntityCoords(ent) + fv * (speed * multiplier)
-            SetEntityCoordsNoOffset(ent, setpos)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos)
+            if IsControlAlwaysPressed(2, SPEED_DECREASE) then
+                Speed = Speed - 0.5
+                if Speed < 0.5 then
+                    Speed = 0.5
+                end
+            elseif IsControlAlwaysPressed(2, SPEED_INCREASE) then
+                Speed = Speed + 0.5
+                if Speed > MaxSpeed then
+                    Speed = MaxSpeed
+                end
+            elseif IsDisabledControlJustReleased(0, SPEED_RESET) then
+                Speed = 1
             end
-        elseif IsDisabledControlPressed(2, 33) then -- S
-            local setpos = GetEntityCoords(ent) - fv * (speed * multiplier)
-            SetEntityCoordsNoOffset(ent, setpos)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos)
+
+            local multi = 1.0
+            if IsControlAlwaysPressed(0, SPEED_FAST_MODIFIER) then
+                multi = 2			
+            elseif IsControlAlwaysPressed(0, SPEED_FASTER_MODIFIER) then
+                multi = 4			
+            elseif IsControlAlwaysPressed(0, SPEED_SLOW_MODIFIER) then
+                multi = 0.25
             end
-        end
 
-        -- Left and Right
-        if IsDisabledControlPressed(2, 34) then -- A
-            local setpos = GetOffsetFromEntityInWorldCoords(ent, -speed * multiplier, 0.0, 0.0)
-            SetEntityCoordsNoOffset(ent, setpos.x, setpos.y, GetEntityCoords(ent).z)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos.x, setpos.y, GetEntityCoords(ent).z)
+            if IsControlAlwaysPressed(0, MOVE_FORWARDS) then
+                local pitch = GetCamRot(Camera, 0)
+
+                if pitch.x >= 0 then
+                    SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, 0.5*(Speed * multi), (pitch.x*((Speed/2) * multi))/89))
+                else
+                    SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, 0.5*(Speed * multi), -1*((math.abs(pitch.x)*((Speed/2) * multi))/89)))
+                end
+            elseif IsControlAlwaysPressed(0, MOVE_BACKWARDS) then
+                local pitch = GetCamRot(Camera, 2)
+
+                if pitch.x >= 0 then
+                    SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, -0.5*(Speed * multi), -1*(pitch.x*((Speed/2) * multi))/89))
+                else
+                    SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, -0.5*(Speed * multi), ((math.abs(pitch.x)*((Speed/2) * multi))/89)))
+                end
             end
-        elseif IsDisabledControlPressed(2, 35) then -- D
-            local setpos = GetOffsetFromEntityInWorldCoords(ent, speed * multiplier, 0.0, 0.0)
-            SetEntityCoordsNoOffset(ent, setpos.x, setpos.y, GetEntityCoords(ent).z)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos.x, setpos.y, GetEntityCoords(ent).z)
+
+            if IsControlAlwaysPressed(0, MOVE_LEFT) then 			
+                SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, -0.5*(Speed * multi), 0.0, 0.0))
+            elseif IsControlAlwaysPressed(0, MOVE_RIGHT) then
+                SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.5*(Speed * multi), 0.0, 0.0))
             end
-        end
 
-        -- Up and Down
-        if IsDisabledControlPressed(2, 22) then -- E
-            local setpos = GetOffsetFromEntityInWorldCoords(ent, 0.0, 0.0, multiplier * speed / 2)
-            SetEntityCoordsNoOffset(ent, setpos)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos)
+            if IsControlAlwaysPressed(0, MOVE_UP) then 			
+                SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, 0.0, 0.5*(Speed * multi)))
+            elseif IsControlAlwaysPressed(0, MOVE_DOWN) then
+                SetEntityCoordsNoOffset(NoClipEntity, GetOffsetFromEntityInWorldCoords(NoClipEntity, 0.0, 0.0, -0.5*(Speed * multi)))
             end
-        elseif IsDisabledControlPressed(2, 52) then
-            local setpos = GetOffsetFromEntityInWorldCoords(ent, 0.0, 0.0, multiplier * -speed / 2) -- Q
-            SetEntityCoordsNoOffset(ent, setpos)
-            if not inVehicle then
-            SetEntityCoordsNoOffset(ped, setpos)
+
+            local coords = GetEntityCoords(NoClipEntity)
+   
+            RequestCollisionAtCoord(coords.x, coords.y, coords.z)
+
+            FreezeEntityPosition(NoClipEntity, true)
+            SetEntityCollision(NoClipEntity, false, false)
+            SetEntityVisible(NoClipEntity, false, false)
+            SetEntityInvincible(NoClipEntity, true)
+            SetLocalPlayerVisibleLocally(true)
+            SetEntityAlpha(NoClipEntity, NoClipAlpha, false)
+            if PlayerIsInVehicle == 1 then
+                SetEntityAlpha(PlayerPed, NoClipAlpha, false)
             end
+            SetEveryoneIgnorePlayer(PlayerPed, true)
+            SetPoliceIgnorePlayer(PlayerPed, true)
         end
-
-        local camrot = GetCamRot(noClipCam, 2)
-        SetEntityHeading(ent, (360 + camrot.z) % 360.0)
-
-        SetEntityVisible(ent, false)
-        if inVehicle then
-            SetEntityVisible(ped, false)
-        end
-
-        DisableControlAction(2, 32, true)
-        DisableControlAction(2, 33, true)
-        DisableControlAction(2, 34, true)
-        DisableControlAction(2, 35, true)
-        DisableControlAction(2, 36, true)
-        DisableControlAction(2, 12, true)
-        DisableControlAction(2, 13, true)
-        DisableControlAction(2, 14, true)
-        DisableControlAction(2, 15, true)
-        DisableControlAction(2, 16, true)
-        DisableControlAction(2, 17, true)
-
-        DisablePlayerFiring(PlayerId(), true)
-        end
-
-        DestroyCam(noClipCam, false)
-        noClipCam = nil
-        RenderScriptCams(false, false, 3000, true, false)
-        FreezeEntityPosition(ent, false)
-        SetEntityCollision(ent, true, true)
-        ResetEntityAlpha(ent)
-        SetPedCanRagdoll(ped, true)
-        SetEntityVisible(ent, not Invisible)
-        ClearPedTasksImmediately(ped)
-
-        if inVehicle then
-        FreezeEntityPosition(ped, false)
-        SetEntityCollision(ped, true, true)
-        ResetEntityAlpha(ped)
-        SetEntityVisible(ped, true)
-        SetPedIntoVehicle(ped, ent, -1)
-        end
+        StopNoClip()
     end)
 end
 
-function checkInputRotation()
-    CreateThread(function()
-        while inputRotEnabled do
-            while noClipCam == nil do
-                Wait(0)
-            end
+StopNoClip = function()
+    FreezeEntityPosition(NoClipEntity, false)
+    SetEntityCollision(NoClipEntity, true, true)
+    SetEntityVisible(NoClipEntity, true, false)
+    SetLocalPlayerVisibleLocally(true)
+    ResetEntityAlpha(NoClipEntity)
+    ResetEntityAlpha(PlayerPed)
+    SetEveryoneIgnorePlayer(PlayerPed, false)
+    SetPoliceIgnorePlayer(PlayerPed, false)
+    ResetEntityAlpha(NoClipEntity)
+    SetPoliceIgnorePlayer(PlayerPed, true)
 
-            while IsPauseMenuActive() do
-                Wait(0)
-            end
-    
-            local axisX = GetDisabledControlNormal(0, 1)
-            local axisY = GetDisabledControlNormal(0, 2)
-
-            local sensitivity = GetProfileSetting(14) * 2
-
-            if GetProfileSetting(15) == 0 --[[ Invert ]] then
-                -- this is default inverse
-                sensitivity = -sensitivity
-            end
-    
-            if (math.abs(axisX) > 0) or (math.abs(axisY) > 0) then
-                local rotation = GetCamRot(noClipCam, 2)
-                local rotz = rotation.z + (axisX * sensitivity)
-        
-                local yValue = (axisY * sensitivity)
-        
-                local rotx = rotation.x
-        
-                if rotx + yValue > minY and rotx + yValue < maxY then
-                    rotx = rotation.x + yValue
-                end
-        
-                SetCamRot(noClipCam, rotx, rotation.y, rotz, 2)
-            end
-    
+    if GetVehiclePedIsIn(PlayerPed, false) ~= 0 then
+        while (not IsVehicleOnAllWheels(NoClipEntity)) and not IsNoClipping do
             Wait(0)
         end
-    end)
+        while not IsNoClipping do
+            Wait(0)
+            if IsVehicleOnAllWheels(NoClipEntity) then
+                return SetEntityInvincible(NoClipEntity, false)
+            end
+        end
+    else
+        if (IsPedFalling(NoClipEntity) and math.abs(1 - GetEntityHeightAboveGround(NoClipEntity)) > 1.00) then
+            while (IsPedStopped(NoClipEntity) or not IsPedFalling(NoClipEntity)) and not IsNoClipping do
+                Wait(0)
+            end
+        end
+        while not IsNoClipping do
+            Wait(0)
+            if (not IsPedFalling(NoClipEntity)) and (not IsPedRagdoll(NoClipEntity)) then
+                return SetEntityInvincible(NoClipEntity, false)
+            end
+        end
+    end
+end
+
+ToggleNoClip = function(state)
+    IsNoClipping = state or not IsNoClipping
+    PlayerPed    = PlayerPedId()
+    PlayerIsInVehicle = IsPedInAnyVehicle(PlayerPed, false)
+    if PlayerIsInVehicle ~= 0 and IsPedDrivingVehicle(PlayerPed, GetVehiclePedIsIn(PlayerPed, false)) then
+        NoClipEntity = GetVehiclePedIsIn(PlayerPed, false)
+        SetVehicleEngineOn(NoClipEntity, not IsNoClipping, true, IsNoClipping)
+        NoClipAlpha = PedFirstPersonNoClip == true and 0 or 51
+    else
+        NoClipEntity = PlayerPed
+        NoClipAlpha = VehFirstPersonNoClip == true and 0 or 51
+    end
+
+    if IsNoClipping then
+        FreezeEntityPosition(PlayerPed)
+        SetupCam()
+        PlaySoundFromEntity(-1, "SELECT", PlayerPed, "HUD_LIQUOR_STORE_SOUNDSET", 0, 0)
+
+        if not PlayerIsInVehicle then
+            ClearPedTasksImmediately(PlayerPed)
+            if PedFirstPersonNoClip then
+                Citizen.Wait(1000) -- Wait for the cinematic effect of the camera transitioning into first person 
+            end
+        else
+            if VehFirstPersonNoClip then
+                Citizen.Wait(1000) -- Wait for the cinematic effect of the camera transitioning into first person 
+            end
+        end
+
+    else
+        local groundCoords      = GetGroundCoords(GetEntityCoords(NoClipEntity))
+        local entityHeading     = GetEntityHeading(NoClipEntity)
+        SetEntityCoords(NoClipEntity, groundCoords.x, groundCoords.y, groundCoords.z)
+        Citizen.Wait(50)
+        DestroyCamera(NoClipEntity)
+        PlaySoundFromEntity(-1, "CANCEL", PlayerPed, "HUD_LIQUOR_STORE_SOUNDSET", 0, 0)
+    end
+    
+    QBCore.Functions.Notify(IsNoClipping and "No-clip enabled" or "No-clip disabled")
+    SetUserRadioControlEnabled(not IsNoClipping)
+   
+    if IsNoClipping then
+        RunNoClipThread()
+    end
 end
 
 RegisterNetEvent('qb-admin:client:ToggleNoClip', function()
-    toggleNoClipMode()
+    ToggleNoClip(not IsNoClipping)
 end)
 
-function toggleNoClipMode(forceMode)
-	if forceMode ~= nil then
-		noClipEnabled = forceMode
-		inputRotEnabled = noClipEnabled
-	else
-		noClipEnabled = not noClipEnabled
-		inputRotEnabled = noClipEnabled
-        TriggerServerEvent('qb-log:server:CreateLog', 'admin', 'Admin menu', 'pink', string.format("**%s** (CitizenID: %s | ID: %s) - Set NoClip to **%s**",
-        GetPlayerName(PlayerId()), Admin.citizenid, Admin.source, noClipEnabled))
-	end
-    if noClipEnabled and inputRotEnabled then
-        toggleNoclip()
-        checkInputRotation()
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName == ResourceName then
+        FreezeEntityPosition(NoClipEntity, false)
+        FreezeEntityPosition(PlayerPed, false)
+        SetEntityCollision(NoClipEntity, true, true)
+        SetEntityVisible(NoClipEntity, true, false)
+        SetLocalPlayerVisibleLocally(true)
+        ResetEntityAlpha(NoClipEntity)
+        ResetEntityAlpha(PlayerPed)
+        SetEveryoneIgnorePlayer(PlayerPed, false)
+        SetPoliceIgnorePlayer(PlayerPed, false)
+        ResetEntityAlpha(NoClipEntity)
+        SetPoliceIgnorePlayer(PlayerPed, true)
+        SetEntityInvincible(NoClipEntity, false)
     end
-end
+end)
