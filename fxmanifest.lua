@@ -3,12 +3,13 @@ game 'gta5'
 
 author 'Disabled Coding'
 description 'Admin menu specifically made for the QBCore framework'
-version '2.1.1'
+version '2.1.2'
 repository 'https://github.com/Disabled-Coding/dc-adminmenu'
 
 shared_scripts {
     '@qb-core/shared/locale.lua',
     'locales/en.lua', -- Change to the language you want
+    'config.lua'
 }
 
 client_scripts {
@@ -25,10 +26,10 @@ client_scripts {
 
 server_scripts {
 	'@oxmysql/lib/MySQL.lua',
-    'server/config.lua',
+    'server/serverconfig.lua',
     'server/main.lua',
     'server/commands.lua',
-    'server/playersmenu.lua',
+    'server/playersmenu.lua'
 }
 
 ui_page 'html/index.html'
